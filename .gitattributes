@@ -1,0 +1,24 @@
+auto eol=lf
+
+# OS 依存で CRLF が必要なファイルだけ明示的に許可
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# シェルやスクリプトは LF を強制
+*.sh   text eol=lf
+*.py   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+
+# バイナリは改行変換しない
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.pdf  binary
+*.zip  binary
+*.exe  binary
+*.dll  binary
+
