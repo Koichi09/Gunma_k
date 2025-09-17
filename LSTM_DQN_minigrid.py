@@ -13,18 +13,18 @@ import matplotlib.pyplot as plt
 
 # --- ハイパーパラメータ設定 ---
 # カリキュラム学習の設定
-MAZE_SIZES = [5, 8, 16]
-EPISODES_PER_STAGE = 1000
+MAZE_SIZES = [5] #[5, 8, 16]
+EPISODES_PER_STAGE = 100000 #10000
 
 # DQNエージェントの設定
 GAMMA = 0.99
 EPSILON_START = 1.0
 EPSILON_END = 0.05
-EPSILON_DECAY = 30000
+EPSILON_DECAY = 100000
 REPLAY_BUFFER_SIZE = 50000
-BATCH_SIZE = 128
-LEARNING_RATE = 3e-5 
-TARGET_UPDATE_FREQ = 100
+BATCH_SIZE = 64
+LEARNING_RATE = 1e-4 
+TARGET_UPDATE_FREQ = 1000
 
 # デバイス設定
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -34,9 +34,9 @@ print(f"Using device: {device}")
 Transition = namedtuple('Transition', 
                         ('state', 'action', 'next_state', 'reward', 'terminated'))
 
-# LSTM用のシーケンス経験
+# LSTM用のシーケンス経験（有効マスクを追加）
 SequenceTransition = namedtuple('SequenceTransition',
-                               ('state_sequence', 'action_sequence', 'reward_sequence', 'terminated_sequence'))
+                               ('state_sequence', 'action_sequence', 'reward_sequence', 'terminated_sequence', 'valid_sequence_mask'))
 
 # --- リプレイバッファ ---
 class ReplayBuffer:
@@ -51,25 +51,36 @@ class ReplayBuffer:
 
     def end_episode(self):
         """エピソード終了時にシーケンスを保存"""
-        if len(self.episode_buffer) >= self.sequence_length:
-            # シーケンスを抽出
-            for i in range(len(self.episode_buffer) - self.sequence_length + 1):
+        ep_len = len(self.episode_buffer)
+        if ep_len >= self.sequence_length:
+            # スライディングウィンドウで固定長シーケンスを抽出
+            for i in range(ep_len - self.sequence_length + 1):
                 sequence = self.episode_buffer[i:i + self.sequence_length]
-                
-                # 各シーケンスの形状:
-                # t.state: [1, h, w, c] -> squeeze(0) -> [h, w, c]
-                # t.action: [1, 1] -> squeeze(0) -> [1] 
-                # t.reward: [1] -> [1]
-                # t.terminated: [1] -> [1]
-                state_seq = torch.stack([t.state.squeeze(0) for t in sequence])  # [seq_len, h, w, c]
-                action_seq = torch.stack([t.action.squeeze(0) for t in sequence])  # [seq_len, 1]
-                reward_seq = torch.stack([t.reward for t in sequence])  # [seq_len, 1]
-                terminated_seq = torch.stack([t.terminated for t in sequence])  # [seq_len, 1]
-                
-                self.memory.append(SequenceTransition(
-                    state_seq, action_seq, reward_seq, terminated_seq
-                ))
-        
+                state_seq = torch.stack([t.state.squeeze(0) for t in sequence])
+                action_seq = torch.stack([t.action.squeeze(0) for t in sequence])
+                reward_seq = torch.stack([t.reward for t in sequence])
+                terminated_seq = torch.stack([t.terminated for t in sequence])
+                valid_mask = torch.ones(self.sequence_length, dtype=torch.bool, device=state_seq.device)
+                self.memory.append(SequenceTransition(state_seq, action_seq, reward_seq, terminated_seq, valid_mask))
+        elif ep_len > 0:
+            # 短いエピソードは末尾の遷移を繰り返してパディングして固定長にする
+            last_transition = self.episode_buffer[-1]
+            padded = list(self.episode_buffer)
+            while len(padded) < self.sequence_length:
+                # 末尾遷移を複製（報酬0、terminated=True を維持）
+                pad_state = last_transition.state
+                pad_action = last_transition.action
+                pad_reward = torch.zeros_like(last_transition.reward)
+                pad_terminated = torch.tensor(True, device=pad_state.device)
+                padded.append(Transition(pad_state, pad_action, last_transition.next_state, pad_reward, pad_terminated))
+            state_seq = torch.stack([t.state.squeeze(0) for t in padded])
+            action_seq = torch.stack([t.action.squeeze(0) for t in padded])
+            reward_seq = torch.stack([t.reward for t in padded])
+            terminated_seq = torch.stack([t.terminated for t in padded])
+            valid_mask = torch.zeros(self.sequence_length, dtype=torch.bool, device=state_seq.device)
+            valid_mask[:ep_len] = True
+            self.memory.append(SequenceTransition(state_seq, action_seq, reward_seq, terminated_seq, valid_mask))
+
         self.episode_buffer = []  # エピソードバッファをクリア
 
     def sample(self, batch_size):
@@ -167,6 +178,7 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
         self.replay_buffer = ReplayBuffer(REPLAY_BUFFER_SIZE)
         self.steps_done = 0
+        self.update_steps = 0  # ターゲット同期のステップカウンタ（学習ステップ基準）
         
         # LSTMの隠れ状態を管理
         self.hidden_state = None
@@ -174,9 +186,8 @@ class DQNAgent:
 
     def select_action(self, state):
         eps_threshold = EPSILON_END + (EPSILON_START - EPSILON_END) * \
-                        math.exp(-1. * self.steps_done / EPSILON_DECAY)
+                        math.exp(-1.0 * self.steps_done / EPSILON_DECAY)
         self.steps_done += 1
-        
         if random.random() > eps_threshold:
             with torch.no_grad():
                 q_values, self.hidden_state = self.policy_net(state, self.hidden_state)
@@ -196,39 +207,55 @@ class DQNAgent:
         sequences = self.replay_buffer.sample(BATCH_SIZE)
         
         # シーケンスをバッチに変換
-        # 各シーケンスの形状:
         # seq.state_sequence: [seq_len, h, w, c]
         # seq.action_sequence: [seq_len, 1]
-        # seq.reward_sequence: [seq_len, 1] 
-        # seq.terminated_sequence: [seq_len, 1]
-        state_sequences = torch.stack([seq.state_sequence for seq in sequences])  # [batch_size, seq_len, h, w, c]
-        action_sequences = torch.stack([seq.action_sequence for seq in sequences])  # [batch_size, seq_len, 1]
-        reward_sequences = torch.stack([seq.reward_sequence for seq in sequences])  # [batch_size, seq_len, 1]
-        terminated_sequences = torch.stack([seq.terminated_sequence for seq in sequences])  # [batch_size, seq_len, 1]
+        # seq.reward_sequence: [seq_len, 1]
+        # seq.terminated_sequence: [seq_len] or [seq_len, 1]
+        state_sequences = torch.stack([seq.state_sequence for seq in sequences]).to(device)  # [B, L, H, W, C]
+        action_sequences = torch.stack([seq.action_sequence for seq in sequences]).to(device)  # [B, L, 1]
+        reward_sequences = torch.stack([seq.reward_sequence for seq in sequences]).to(device)  # [B, L, 1]
+        terminated_sequences = torch.stack([seq.terminated_sequence for seq in sequences]).to(device)  # [B, L] or [B, L, 1]
+        valid_masks = torch.stack([seq.valid_sequence_mask for seq in sequences]).to(device)  # [B, L]
 
-        # 現在のQ値を計算（LSTMの隠れ状態を考慮）
-        current_q_values, _ = self.policy_net(state_sequences)  # [batch_size, seq_len, action_space_n]
-        current_q_values = current_q_values.gather(2, action_sequences)  # [batch_size, seq_len, 1]
+        # 1ステップずらしてTD(0)ターゲットを作るために、tとt+1で切り出し
+        # 対象タイムステップは 0..L-2（最後は次状態がないため除外）
+        state_t = state_sequences[:, :-1, ...]            # [B, L-1, H, W, C]
+        action_t = action_sequences[:, :-1, :]            # [B, L-1, 1]
+        reward_t = reward_sequences[:, :-1, :]            # [B, L-1, 1]
+        # 終了フラグはtのものを使用
+        term_t = terminated_sequences[:, :-1]
+        if term_t.dim() == 3 and term_t.size(-1) == 1:
+            term_t = term_t.squeeze(-1)                  # [B, L-1]
+        state_tp1 = state_sequences[:, 1:, ...]          # [B, L-1, H, W, C]
+        valid_t = valid_masks[:, :-1]                    # [B, L-1]
 
-        # ターゲットQ値を計算
+        # 現在のQ(s_t, a_t)
+        current_q_all, _ = self.policy_net(state_t)      # [B, L-1, A]
+        current_q_values = current_q_all.gather(2, action_t)  # [B, L-1, 1]
+
+        # 目標 max_a' Q_target(s_{t+1}, a')
         with torch.no_grad():
-            next_q_values, _ = self.target_net(state_sequences)  # [batch_size, seq_len, action_space_n]
-            next_q_values = next_q_values.max(2)[0]  # [batch_size, seq_len]
-            
-            # ベルマン方程式でターゲットを計算
-            # reward_sequences.squeeze(-1): [batch_size, seq_len]
-            # next_q_values: [batch_size, seq_len]
-            # terminated_sequences.squeeze(-1): [batch_size, seq_len]
-            target_q_values = reward_sequences.squeeze(-1) + (GAMMA * next_q_values * (~ terminated_sequences.squeeze(-1)))  # [batch_size, seq_len]
+            next_q_all, _ = self.target_net(state_tp1)   # [B, L-1, A]
+            next_q_max = next_q_all.max(2)[0]            # [B, L-1]
+            target_q_values = reward_t.squeeze(-1) + (GAMMA * next_q_max * (~term_t))  # [B, L-1]
 
-        # 損失計算（シーケンス全体で平均）
-        # current_q_values.squeeze(-1): [batch_size, seq_len]
-        # target_q_values: [batch_size, seq_len]
-        loss = F.mse_loss(current_q_values.squeeze(-1), target_q_values)  # スカラー
+        # 損失
+        td_error = current_q_values.squeeze(-1) - target_q_values  # [B, L-1]
+        # 無効部分を除外（Falseのところは0にし、分母は有効数）
+        td_error = td_error * valid_t
+        denom = valid_t.sum().clamp(min=1).float()
+        loss = (td_error.pow(2).sum() / denom)
 
         self.optimizer.zero_grad()
         loss.backward()
+        # 勾配クリッピング
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=10.0)
         self.optimizer.step()
+
+        # ターゲットネットを学習ステップ基準で同期
+        self.update_steps += 1
+        if self.update_steps % TARGET_UPDATE_FREQ == 0:
+            self.sync_target_network()
 
     def sync_target_network(self):
         self.target_net.load_state_dict(self.policy_net.state_dict())
@@ -263,7 +290,8 @@ if __name__ == "__main__":
                 obs, reward, terminated, truncated, info = env.step(action.item())
                 episode_reward += reward
 
-                next_state = torch.tensor(obs, device=device).unsqueeze(0).float() if not terminated else None  # [1, h, w, c] または None
+                done_flag = terminated or truncated
+                next_state = torch.tensor(obs, device=device).unsqueeze(0).float() if not done_flag else None  # [1, h, w, c] または None
                 
                 # リプレイバッファに保存するデータの形状:
                 # state: [1, h, w, c]
@@ -273,7 +301,7 @@ if __name__ == "__main__":
                 # terminated: [1]
                 agent.replay_buffer.push(state, action, next_state, 
                                          torch.tensor([reward], device=device), 
-                                         torch.tensor(terminated, device=device))
+                                         torch.tensor(done_flag, device=device))
                 state = next_state
                 agent.update_model()
 
@@ -281,8 +309,7 @@ if __name__ == "__main__":
             agent.replay_buffer.end_episode()
             stage_rewards.append(episode_reward)
 
-            if (episode + 1) % TARGET_UPDATE_FREQ == 0:
-                agent.sync_target_network()
+            # 学習ステップ基準で同期するため、エピソード末の同期は削除
             
             if (episode + 1) % 100 == 0:
                 avg_reward = np.mean(stage_rewards[-100:])
