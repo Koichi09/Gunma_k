@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from minigrid.wrappers import ImgObsWrapper
+from minigrid.wrappers import ImgObsWrapper, ActionBonus, OneHotPartialObsWrapper
 
 import random
 import math
@@ -396,6 +396,8 @@ if __name__ == "__main__":
     LOAD_MODEL = False  # 既存のモデルを読み込むかどうか
     MODEL_SAVE_PATH = "models/DRQN_model.pt"
     SAVE_FREQUENCY = 1000  # 何エピソードごとに保存するか
+    ACTION_BONUS = False
+    ONE_HOT_ENCODE = True
     
     # wandb設定
     USE_WANDB = True
@@ -440,6 +442,10 @@ if __name__ == "__main__":
         print(f"--- Curriculum Stage {stage + 1}: {size}x{size} Maze ---")
         env = gym.make(f'MiniGrid-Empty-{size}x{size}-v0')
         env = ImgObsWrapper(env)
+        if ACTION_BONUS == True:
+            env = ActionBonus(env)
+        if ONE_HOT_ENCODE == True:
+            env = OneHotPartialObsWrapper(env)
         
         if agent is None:
             obs_shape = env.observation_space.shape
