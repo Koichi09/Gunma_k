@@ -21,17 +21,17 @@ import wandb
 # --- ハイパーパラメータ設定 ---
 # カリキュラム学習の設定
 MAZE_SIZES = [5, 8, 16]
-EPISODES_PER_STAGE = 10000 #10000
+EPISODES_PER_STAGE = 5000 
 
 # DQNエージェントの設定
 GAMMA = 0.99
 EPSILON_START = 1.0
 EPSILON_END = 0.05
-EPSILON_DECAY = 10000
-REPLAY_BUFFER_SIZE = 50000
+EPSILON_DECAY = 5000
+REPLAY_BUFFER_SIZE = 25000
 BATCH_SIZE = 64 #もとは64だからそのままにしているがDQNの方はsequenceではないので学習回数が少なくなってしまう。これを解消するためにはどうすればいいか?
 LEARNING_RATE = 1e-4 
-TARGET_UPDATE_FREQ = 100
+TARGET_UPDATE_FREQ = 50
 
 # デバイス設定
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -139,7 +139,6 @@ class DQNAgent:
         
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=LEARNING_RATE)
         self.replay_buffer = ReplayBuffer(REPLAY_BUFFER_SIZE)
-        self.steps_done = 0
         self.update_steps = 0  # ターゲット同期のステップカウンタ（学習ステップ基準）
         self.current_stage = 0
         self.episode_count = 0
@@ -147,8 +146,7 @@ class DQNAgent:
     def select_action(self, state):
         # ステージをまたいでepsilonが減衰
         eps_threshold = EPSILON_END + (EPSILON_START - EPSILON_END) * \
-                        math.exp(-1.0 * self.steps_done / EPSILON_DECAY)
-        self.steps_done += 1
+                        math.exp(-1.0 * self.episode_count / EPSILON_DECAY)
         if random.random() > eps_threshold:
             with torch.no_grad():
                 q_values = self.policy_net(state)
@@ -190,11 +188,6 @@ class DQNAgent:
     def set_stage(self, stage):
         """ステージを設定し、学習率を調整"""
         self.current_stage = stage
-        # ステージが進むごとに学習率を少し下げる
-        new_lr = LEARNING_RATE * (0.8 ** stage)
-        for param_group in self.optimizer.param_groups:
-            param_group['lr'] = new_lr
-        print(f"Stage {stage + 1}: Learning rate adjusted to {new_lr:.2e}")
     
     def increment_episode(self):
         """エピソードカウントを増加"""
@@ -209,7 +202,6 @@ class DQNAgent:
             'policy_net_state_dict': self.policy_net.state_dict(),
             'target_net_state_dict': self.target_net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'steps_done': self.steps_done,
             'update_steps': self.update_steps,
             'current_stage': self.current_stage,
             'episode_count': self.episode_count,
@@ -235,7 +227,6 @@ class DQNAgent:
         self.optimizer.load_state_dict(save_data['optimizer_state_dict'])
         
         # エージェントの状態を復元
-        self.steps_done = save_data['steps_done']
         self.update_steps = save_data['update_steps']
         self.current_stage = save_data['current_stage']
         self.episode_count = save_data['episode_count']
@@ -247,7 +238,7 @@ class DQNAgent:
         self.replay_buffer.current_stage = save_data['replay_buffer_current_stage']
         
         print(f"Model loaded from {filepath}")
-        print(f"Loaded: steps_done={self.steps_done}, current_stage={self.current_stage}, episode_count={self.episode_count}")
+        print(f"Loaded: current_stage={self.current_stage}, episode_count={self.episode_count}")
     
     @classmethod
     def create_from_saved(cls, filepath, obs_space_shape):
@@ -373,7 +364,7 @@ if __name__ == "__main__":
                         "avg_reward_100": avg_reward,
                         "episode_reward": episode_reward,
                         "epsilon": EPSILON_END + (EPSILON_START - EPSILON_END) * 
-                                 math.exp(-1.0 * agent.steps_done / EPSILON_DECAY),
+                                 math.exp(-1.0 * agent.episode_count / EPSILON_DECAY),
                         "replay_buffer_size": len(agent.replay_buffer),
                         "learning_rate": agent.optimizer.param_groups[0]['lr']
                     })
