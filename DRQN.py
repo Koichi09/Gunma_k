@@ -1,6 +1,7 @@
 # DQN
 
 import gymnasium as gym
+from gymnasium.wrappers import RecordVideo
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -27,7 +28,7 @@ EPISODES_PER_STAGE = 5000
 GAMMA = 0.99
 EPSILON_START = 1.0
 EPSILON_END = 0.05
-EPSILON_DECAY = 5000
+EPSILON_DECAY = 1250
 REPLAY_BUFFER_SIZE = 25000
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-4 
@@ -248,16 +249,21 @@ class DQNAgent:
         self.hidden_state = None
         self.target_hidden_state = None
 
-    def select_action(self, state):
-        # ステージをまたいでepsilonが減衰
-        eps_threshold = EPSILON_END + (EPSILON_START - EPSILON_END) * \
-                        math.exp(-1.0 * self.episode_count / EPSILON_DECAY)
-        if random.random() > eps_threshold:
+    def select_action(self, state, mode="epsilon_greedy"):
+        if mode == "epsilon_greedy":
+            # ステージごとにepsilonが減衰
+            eps_threshold = EPSILON_END + (EPSILON_START - EPSILON_END) * \
+                            math.exp(-1.0 * self.episode_count / EPSILON_DECAY)
+            if random.random() > eps_threshold:
+                with torch.no_grad():
+                    q_values, self.hidden_state = self.policy_net(state, self.hidden_state)
+                    return q_values.max(1)[1].view(1, 1)
+            else:
+                return torch.tensor([[random.randrange(self.action_space_n)]], device=device, dtype=torch.long)
+        elif mode == "greedy":
             with torch.no_grad():
-                q_values, self.hidden_state = self.policy_net(state, self.hidden_state)
-                return q_values.max(1)[1].view(1, 1)
-        else:
-            return torch.tensor([[random.randrange(self.action_space_n)]], device=device, dtype=torch.long)
+                    q_values, self.hidden_state = self.policy_net(state, self.hidden_state)
+                    return q_values.max(1)[1].view(1, 1)
     
     def reset_hidden_state(self):
         """エピソード開始時に隠れ状態をリセット"""
@@ -318,8 +324,9 @@ class DQNAgent:
             self.sync_target_network()
     
     def set_stage(self, stage):
-        """ステージを設定し、学習率を調整"""
+        """ステージを設定し、epsilonを調整"""
         self.current_stage = stage
+        self.episode_count = 0
     
     def increment_episode(self):
         """エピソードカウントを増加"""
@@ -401,8 +408,8 @@ if __name__ == "__main__":
     
     # wandb設定
     USE_WANDB = True
-    WANDB_PROJECT = "minigrid"
-    WANDB_ENTITY = None  # あなたのwandbユーザー名（Noneの場合はデフォルト）
+    WANDB_PROJECT = "DQN vs DRQN"
+    WANDB_ENTITY = "minigrid_Gunma"  # あなたのwandbユーザー名（Noneの場合はデフォルト）
     
     # wandb初期化
     if USE_WANDB:
@@ -441,11 +448,13 @@ if __name__ == "__main__":
     for stage, size in enumerate(MAZE_SIZES):
         print(f"--- Curriculum Stage {stage + 1}: {size}x{size} Maze ---")
         env = gym.make(f'MiniGrid-Empty-{size}x{size}-v0')
-        env = ImgObsWrapper(env)
-        if ACTION_BONUS == True:
-            env = ActionBonus(env)
         if ONE_HOT_ENCODE == True:
             env = OneHotPartialObsWrapper(env)
+        if ACTION_BONUS == True:
+            env = ActionBonus(env)
+        env = ImgObsWrapper(env)
+        
+        
         
         if agent is None:
             obs_shape = env.observation_space.shape
@@ -518,11 +527,11 @@ if __name__ == "__main__":
             
             # 定期的にモデルを保存
             if SAVE_MODEL and (episode + 1) % SAVE_FREQUENCY == 0:
-                agent.save_model(f"models/dqn_lstm_stage{stage+1}_ep{episode+1}.pt")
+                agent.save_model(f"models/DRQN{stage+1}_ep{episode+1}.pt")
         
         # ステージ終了時にモデルを保存
         if SAVE_MODEL:
-            agent.save_model(f"models/dqn_lstm_stage{stage+1}_final.pt")
+            agent.save_model(f"models/DRQN{stage+1}_final.pt")
             agent.save_model(MODEL_SAVE_PATH)  # 最新のモデルを保存
         
         # ステージ完了をwandbに記録
@@ -553,18 +562,16 @@ if __name__ == "__main__":
         plt.plot(episodes, moving_avg, label=f'Stage: {size}')
         total_episodes += len(rewards)
     
-    plt.title("DQN with Curriculum Learning Performance")
+    plt.title("DRQN")
     plt.xlabel("Total Episodes")
     plt.ylabel("Average Reward (Moving Avg over 100 episodes)")
     plt.legend()
     plt.grid(True)
-    plt.savefig("dqn_curriculum_performance.png")
+    plt.savefig("DRQN.png")
     
     # wandbにプロットをアップロード
     if USE_WANDB:
-        wandb.log({"performance_plot": wandb.Image("dqn_curriculum_performance.png")})
-    
-    plt.show()
+        wandb.log({"performance_plot": wandb.Image("DRQNe.png")})
     
     # wandb終了
     if USE_WANDB:

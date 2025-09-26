@@ -1,6 +1,7 @@
 # DQN_without_PER
 
 import gymnasium as gym
+from gymnasium.wrappers import RecordVideo
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -27,7 +28,7 @@ EPISODES_PER_STAGE = 5000
 GAMMA = 0.99
 EPSILON_START = 1.0
 EPSILON_END = 0.05
-EPSILON_DECAY = 5000
+EPSILON_DECAY = 1250
 REPLAY_BUFFER_SIZE = 25000
 BATCH_SIZE = 64 #もとは64だからそのままにしているがDQNの方はsequenceではないので学習回数が少なくなってしまう。これを解消するためにはどうすればいいか?
 LEARNING_RATE = 1e-4 
@@ -143,16 +144,21 @@ class DQNAgent:
         self.current_stage = 0
         self.episode_count = 0
 
-    def select_action(self, state):
+    def select_action(self, state, mode="epsilon_greedy"):
         # ステージをまたいでepsilonが減衰
-        eps_threshold = EPSILON_END + (EPSILON_START - EPSILON_END) * \
-                        math.exp(-1.0 * self.episode_count / EPSILON_DECAY)
-        if random.random() > eps_threshold:
+        if mode == "epsilon_greedy":
+            eps_threshold = EPSILON_END + (EPSILON_START - EPSILON_END) * \
+                            math.exp(-1.0 * self.episode_count / EPSILON_DECAY)
+            if random.random() > eps_threshold:
+                with torch.no_grad():
+                    q_values = self.policy_net(state)
+                    return q_values.max(1)[1].view(1, 1)
+            else:
+                return torch.tensor([[random.randrange(self.action_space_n)]], device=device, dtype=torch.long)
+        elif mode == "greedy":
             with torch.no_grad():
-                q_values = self.policy_net(state)
-                return q_values.max(1)[1].view(1, 1)
-        else:
-            return torch.tensor([[random.randrange(self.action_space_n)]], device=device, dtype=torch.long)
+                    q_values, self.hidden_state = self.policy_net(state, self.hidden_state)
+                    return q_values.max(1)[1].view(1, 1)
 
     def update_model(self):
         if len(self.replay_buffer) < BATCH_SIZE:
@@ -188,6 +194,7 @@ class DQNAgent:
     def set_stage(self, stage):
         """ステージを設定し、学習率を調整"""
         self.current_stage = stage
+        self.episode_count = 0
     
     def increment_episode(self):
         """エピソードカウントを増加"""
@@ -265,8 +272,8 @@ if __name__ == "__main__":
     
     # wandb設定
     USE_WANDB = True
-    WANDB_PROJECT = "minigrid"
-    WANDB_ENTITY = None  # あなたのwandbユーザー名（Noneの場合はデフォルト）
+    WANDB_PROJECT = "DQN vs DRQN"
+    WANDB_ENTITY = "minigrid_Gunma" # あなたのwandbユーザー名（Noneの場合はデフォルト）
     
     # wandb初期化
     if USE_WANDB:
@@ -305,11 +312,12 @@ if __name__ == "__main__":
     for stage, size in enumerate(MAZE_SIZES):
         print(f"--- Curriculum Stage {stage + 1}: {size}x{size} Maze ---")
         env = gym.make(f'MiniGrid-Empty-{size}x{size}-v0')
-        env = ImgObsWrapper(env)
         if ACTION_BONUS == True:
             env = ActionBonus(env)
         if ONE_HOT_ENCODE == True:
             env = OneHotPartialObsWrapper(env)
+        env = ImgObsWrapper(env)
+        
         
         if agent is None:
             obs_shape = env.observation_space.shape
@@ -422,8 +430,6 @@ if __name__ == "__main__":
     # wandbにプロットをアップロード
     if USE_WANDB:
         wandb.log({"performance_plot": wandb.Image("DQN without PER.png")})
-    
-    plt.show()
     
     # wandb終了
     if USE_WANDB:
