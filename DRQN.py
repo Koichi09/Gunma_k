@@ -571,7 +571,7 @@ if __name__ == "__main__":
     
     # wandbにプロットをアップロード
     if USE_WANDB:
-        wandb.log({"performance_plot": wandb.Image("DRQNe.png")})
+        wandb.log({"performance_plot": wandb.Image("DRQN.png")})
     
     # wandb終了
     if USE_WANDB:

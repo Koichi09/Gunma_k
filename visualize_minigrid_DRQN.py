@@ -37,14 +37,6 @@ class ReplayBuffer:
         self.stage_memories = {}  # 各ステージの経験を保持
         self.current_stage = 0
 
-    def push(self, *args):
-        """単一の遷移を保存"""
-        self.episode_buffer.append(Transition(*args))
-
-    # （学習時用のAPI。可視化のみなら未使用）
-    def __len__(self):
-        return len(self.memory)
-
 # --- CNN+LSTMベースのQネットワーク ---
 class QNetwork(nn.Module):
     def __init__(self, obs_space_shape, action_space_n, hidden_dim=256):
@@ -145,17 +137,11 @@ class DQNAgent:
             t = t / 255.0
         return t
 
-    def select_action(self, state, mode="epsilon_greedy"):
+    def select_action(self, state):
         state = self._ensure_tensor(state)
 
         if self.hidden_state is None:
             self.hidden_state = self.policy_net.init_hidden(batch_size=state.size(0))
-
-        if mode == "epsilon_greedy":
-            eps_threshold = EPSILON_END + (EPSILON_START - EPSILON_END) * \
-                            math.exp(-1.0 * self.episode_count / EPSILON_DECAY)
-            if random.random() <= eps_threshold:
-                return random.randrange(self.action_space_n)   # ★ int を返す
         # greedy
         with torch.no_grad():
             q_values, self.hidden_state = self.policy_net(state, self.hidden_state)
@@ -164,44 +150,6 @@ class DQNAgent:
     def reset_hidden_state(self):
         self.hidden_state = None
         self.target_hidden_state = None
-
-    # 以下は学習用。可視化だけなら未使用
-    def update_model(self):
-        if len(self.replay_buffer) < BATCH_SIZE:
-            return
-        # ...（省略：あなたの元コードのまま）...
-        pass
-
-    def set_stage(self, stage):
-        self.current_stage = stage
-        self.episode_count = 0
-
-    def increment_episode(self):
-        self.episode_count += 1
-
-    def sync_target_network(self):
-        self.target_net.load_state_dict(self.policy_net.state_dict())
-
-    def save_model(self, filepath):
-        save_data = {
-            'policy_net_state_dict': self.policy_net.state_dict(),
-            'target_net_state_dict': self.target_net.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'update_steps': self.update_steps,
-            'current_stage': self.current_stage,
-            'episode_count': self.episode_count,
-            'replay_buffer_memory': list(self.replay_buffer.memory),
-            'replay_buffer_stage_memories': {k: list(v) for k, v in self.replay_buffer.stage_memories.items()},
-            'replay_buffer_current_stage': self.replay_buffer.current_stage,
-            'action_space_n': self.action_space_n,
-            'model_config': {
-                'hidden_dim': self.policy_net.hidden_dim,
-                'sequence_length': self.replay_buffer.sequence_length
-            }
-        }
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        torch.save(save_data, filepath)
-        print(f"Model saved to {filepath}")
 
     def load_model(self, filepath):
         # ★ map_location でデバイスへ
@@ -247,7 +195,7 @@ BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
 TARGET_UPDATE_FREQ = 50
 
-MODEL_SAVE_PATH = "models/dqn_lstm_stage3_final.pt"
+MODEL_SAVE_PATH = "models/DRQN_model.pt"
 ACTION_BONUS = False
 ONE_HOT_ENCODE = True
 
@@ -278,7 +226,7 @@ obs_vis, _   = vis_env.reset(seed=0)
 done = False
 while not done:
     # --- 観測をTensor化（0-1正規化も内部で対応） ---
-    action = agent.select_action(obs_agent, mode="greedy")  # ★ int を返す
+    action = agent.select_action(obs_agent)  # ★ int を返す
 
     # 同じ action を両方に適用
     obs_agent, r, term1, trunc1, _ = agent_env.step(action)
