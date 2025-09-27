@@ -49,9 +49,11 @@ class ReplayBuffer:
         self.stage_memories = {}  # 各ステージの経験を保持
         self.current_stage = 0
 
-    def push(self, *args):
+    def push(self, *args, stage=None):
         """単一の遷移を保存"""
-        self.current_stage = stage # ステージ別にも保存
+        # ステージ別にも保存
+        if stage is None:
+            stage = self.current_stage
         if stage not in self.stage_memories:
             self.stage_memories[stage] = deque([], maxlen=self.memory.maxlen//3)
         self.memory.append(Transition(*args))
@@ -125,7 +127,7 @@ class QNetwork(nn.Module):
             nn.Linear(256, action_space_n)
         )
     def forward(self, x):
-        x = x.to(device).float() / 255.0
+        x = x.to(device).float() 
         x = x.permute(0, 3, 1, 2)
         return self.fc(self.cnn(x))
 
@@ -157,7 +159,7 @@ class DQNAgent:
                 return torch.tensor([[random.randrange(self.action_space_n)]], device=device, dtype=torch.long)
         elif mode == "greedy":
             with torch.no_grad():
-                    q_values, self.hidden_state = self.policy_net(state, self.hidden_state)
+                    q_values = self.policy_net(state)
                     return q_values.max(1)[1].view(1, 1)
 
     def update_model(self):
@@ -194,6 +196,7 @@ class DQNAgent:
     def set_stage(self, stage):
         """ステージを設定し、学習率を調整"""
         self.current_stage = stage
+        self.replay_buffer.current_stage = stage
         self.episode_count = 0
     
     def increment_episode(self):
@@ -281,7 +284,7 @@ if __name__ == "__main__":
             project=WANDB_PROJECT,
             entity=WANDB_ENTITY,
             config={
-                "mode": "DQN_without_PER",
+                "mode": "DQN_without_PER_modified",
                 "maze_sizes": MAZE_SIZES,
                 "episodes_per_stage": EPISODES_PER_STAGE,
                 "gamma": GAMMA,
@@ -312,10 +315,10 @@ if __name__ == "__main__":
     for stage, size in enumerate(MAZE_SIZES):
         print(f"--- Curriculum Stage {stage + 1}: {size}x{size} Maze ---")
         env = gym.make(f'MiniGrid-Empty-{size}x{size}-v0')
-        if ACTION_BONUS == True:
-            env = ActionBonus(env)
         if ONE_HOT_ENCODE == True:
             env = OneHotPartialObsWrapper(env)
+        if ACTION_BONUS == True:
+            env = ActionBonus(env)
         env = ImgObsWrapper(env)
         
         
@@ -357,7 +360,8 @@ if __name__ == "__main__":
                 # terminated: [1]
                 agent.replay_buffer.push(state, action, next_state, 
                                          torch.tensor([reward], device=device), 
-                                         torch.tensor(done_flag, device=device))
+                                         torch.tensor(done_flag, device=device),
+                                         stage=agent.current_stage)
                 state = next_state
 
                 agent.update_model()
@@ -407,6 +411,7 @@ if __name__ == "__main__":
             })
         
         all_stage_rewards[f"{size}x{size}"] = stage_rewards
+        print({k: len(v) for k, v in agent.replay_buffer.stage_memories.items()})
         print(f"--- Stage {stage + 1} Complete ---")
 
     env.close()

@@ -109,7 +109,7 @@ class DQNAgent:
         self.replay_buffer.current_stage = save_data['replay_buffer_current_stage']
         
         print(f"Model loaded from {filepath}")
-        print(f"Loaded: current_stage={self.current_stage}, episode_count={self.episode_count}")
+        print(f"Loaded: current_stage={self.current_stage + 1}, episode_count={self.episode_count}")
     
     @classmethod
     def create_from_saved(cls, filepath, obs_space_shape):
@@ -136,7 +136,7 @@ BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
 TARGET_UPDATE_FREQ = 50
 
-MODEL_SAVE_PATH = "models/DQN_without_PER_model.pt"
+MODEL_SAVE_PATH = "models/DQN_without_PER_stage2_final.pt"
 ACTION_BONUS = False
 ONE_HOT_ENCODE = True
 

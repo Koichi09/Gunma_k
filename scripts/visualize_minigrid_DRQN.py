@@ -174,7 +174,7 @@ class DQNAgent:
         self.target_net.to(DEVICE)
 
         print(f"Model loaded from {filepath}")
-        print(f"Loaded: current_stage={self.current_stage}, episode_count={self.episode_count}")
+        print(f"Loaded: current_stage={self.current_stage + 1}, episode_count={self.episode_count}")
 
     @classmethod
     def create_from_saved(cls, filepath, obs_space_shape):
