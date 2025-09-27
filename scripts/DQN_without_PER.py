@@ -275,7 +275,7 @@ if __name__ == "__main__":
     
     # wandb設定
     USE_WANDB = True
-    WANDB_PROJECT = "DQN vs DRQN"
+    WANDB_PROJECT = "DQN vs DRQN modified"
     WANDB_ENTITY = "minigrid_Gunma" # あなたのwandbユーザー名（Noneの場合はデフォルト）
     
     # wandb初期化
@@ -284,7 +284,7 @@ if __name__ == "__main__":
             project=WANDB_PROJECT,
             entity=WANDB_ENTITY,
             config={
-                "mode": "DQN_without_PER_modified",
+                "mode": "DQN",
                 "maze_sizes": MAZE_SIZES,
                 "episodes_per_stage": EPISODES_PER_STAGE,
                 "gamma": GAMMA,

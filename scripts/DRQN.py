@@ -408,7 +408,7 @@ if __name__ == "__main__":
     
     # wandb設定
     USE_WANDB = True
-    WANDB_PROJECT = "DQN vs DRQN"
+    WANDB_PROJECT = "DQN vs DRQN modified"
     WANDB_ENTITY = "minigrid_Gunma"  # あなたのwandbユーザー名（Noneの場合はデフォルト）
     
     # wandb初期化
