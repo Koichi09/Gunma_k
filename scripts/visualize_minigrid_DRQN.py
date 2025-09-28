@@ -22,7 +22,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
 # モデルと出力
-MODEL_SAVE_PATH = "models/DRQN_model.pt"
+MODEL_SAVE_PATH = "DQN_without_PER_stage3_final.pt"
 ANNOTATED_OUT   = "videos/drqn_q_annotated.mp4"
 
 # 環境設定

@@ -26,11 +26,11 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {DEVICE}")
 
 # モデルと出力
-MODEL_SAVE_PATH = "models/DQN_without_PER_stage2_final.pt"
-ANNOTATED_OUT   = "videos/dqn_q_annotated.mp4"
+MODEL_SAVE_PATH = "DQN_without_PER_stage1_final.pt"
+ANNOTATED_OUT   = "videos/dqn_q_annotated_stage1.mp4"
 
 # 環境設定
-ENV_ID = "MiniGrid-Empty-16x16-v0"
+ENV_ID = "MiniGrid-Empty-5x5-v0"
 ONE_HOT_ENCODE = True
 ACTION_BONUS   = False
 
@@ -129,6 +129,22 @@ class DQNAgent:
         self.current_stage = 0
         self.episode_count = 0
 
+    def select_action(self, state, mode="epsilon_greedy"):
+    # ステージをまたいでepsilonが減衰
+        state = self._ensure_tensor(state)
+        eps_threshold = 0.05
+        if mode == "epsilon_greedy":
+            if random.random() > eps_threshold:
+                with torch.no_grad():
+                    q_values = self.policy_net(state)
+                    return q_values.max(1)[1].view(1, 1)
+            else:
+                return torch.tensor([[random.randrange(self.action_space_n)]], device=DEVICE, dtype=torch.long)
+        elif mode == "greedy":
+            with torch.no_grad():
+                    q_values = self.policy_net(state)
+                    return q_values.max(1)[1].view(1, 1)
+
     def _ensure_tensor(self, state):
         """NumPy/torch どちらでも受けて [B,H,W,C] float32 へ揃える（スケーリングはしない）"""
         if isinstance(state, np.ndarray):
@@ -221,6 +237,8 @@ def main():
         # 注釈を重ねて保存
         annotated = draw_q_overlay(frame, q, action, ACTION_LABELS)
         writer.append_data(annotated)
+
+        action = int(agent.select_action(obs_agent, mode='greedy'))
 
         # 同じアクションで2つの環境を進める
         obs_agent, r, term1, trunc1, _ = agent_env.step(action)
